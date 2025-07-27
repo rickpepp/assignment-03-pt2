@@ -1,5 +1,8 @@
 package it.unibo.agar.model;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -10,7 +13,12 @@ public class World {
     private final List<Player> players;
     private final List<Food> foods;
 
-    public World(int width, int height, List<Player> players, List<Food> foods) {
+    @JsonCreator
+    public World(
+            @JsonProperty("width") int width,
+            @JsonProperty("height") int height,
+            @JsonProperty("players") List<Player> players,
+            @JsonProperty("foods") List<Food> foods) {
         this.width = width;
         this.height = height;
         this.players = List.copyOf(players); // Ensure immutability

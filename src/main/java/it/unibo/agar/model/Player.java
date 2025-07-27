@@ -1,7 +1,15 @@
 package it.unibo.agar.model;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public class Player extends AbstractEntity {
-    public Player(final String id, final double x, final double y, final double mass) {
+    @JsonCreator
+    public Player(
+            @JsonProperty("id") final String id,
+            @JsonProperty("x") final double x,
+            @JsonProperty("y") final double y,
+            @JsonProperty("mass") final double mass) {
         super(id, x, y, mass);
     }
 
