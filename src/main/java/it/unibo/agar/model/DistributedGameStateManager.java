@@ -12,25 +12,32 @@ import java.util.stream.Collectors;
 
 public class DistributedGameStateManager implements GameStateManager{
     private static final double PLAYER_SPEED = 1.0;
+    private static final int HEIGHT = 1000;
+    private static final int WIDTH = 1000;
+    private static final int N_OF_FOOD = 20;
 
     private static final String EXCHANGE_NAME = "PlayerPosition";
     private final String playerName;
     private World world;
-    private final Channel channel;
+    private Channel channel;
     private final Map<String, Position> playerDirections;
-    private final ObjectMapper mapper;
+    private ObjectMapper mapper;
 
     public DistributedGameStateManager(String hostAddress, String playerName) throws IOException, TimeoutException {
+        this.setRabbitMQConnection(hostAddress);
+        this.world = new World(WIDTH, HEIGHT, List.of(new Player(playerName,200,200,200)),
+                GameInitializer.initialFoods(N_OF_FOOD, WIDTH, HEIGHT, 150));
+        this.playerName = playerName;
+        this.playerDirections = new HashMap<>();
+        this.world.getPlayers().forEach(p -> playerDirections.put(p.getId(), Position.ZERO));
+    }
+
+    private void setRabbitMQConnection(String hostAddress) throws IOException, TimeoutException {
         ConnectionFactory factory = new ConnectionFactory();
-        factory.setRequestedHeartbeat(5);
         factory.setHost(hostAddress);
         Connection connection = factory.newConnection();
         this.channel = connection.createChannel();
         channel.exchangeDeclare(EXCHANGE_NAME, "fanout");
-        this.world = new World(2000, 2000, List.of(new Player(playerName,200,200,200)), List.of());
-        this.playerName = playerName;
-        this.playerDirections = new HashMap<>();
-        this.world.getPlayers().forEach(p -> playerDirections.put(p.getId(), Position.ZERO));
         mapper = new ObjectMapper();
         String queueName = channel.queueDeclare().getQueue();
         channel.queueBind(queueName, EXCHANGE_NAME, "");
@@ -68,6 +75,7 @@ public class DistributedGameStateManager implements GameStateManager{
         String message;
         if (player.isPresent()) {
             message = mapper.writeValueAsString(player.get());
+
         } else {
             message = "";
         }
