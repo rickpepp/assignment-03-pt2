@@ -5,10 +5,12 @@ import it.unibo.agar.view.GlobalView;
 import it.unibo.agar.view.LocalView;
 
 import javax.swing.*;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.TimeoutException;
 
 public class Main {
 
@@ -16,14 +18,17 @@ public class Main {
     private static final int WORLD_HEIGHT = 1000;
     private static final int NUM_PLAYERS = 4; // p1, p2, p3, p4
     private static final int NUM_FOODS = 100;
-    private static final long GAME_TICK_MS = 30; // Corresponds to ~33 FPS
+    private static final long GAME_TICK_MS = 20; // Corresponds to ~33 FPS
 
     public static void main(String[] args) {
-        final List<Player> initialPlayers = GameInitializer.initialPlayers(NUM_PLAYERS, WORLD_WIDTH, WORLD_HEIGHT);
-        final List<Food> initialFoods = GameInitializer.initialFoods(NUM_FOODS, WORLD_WIDTH, WORLD_HEIGHT);
-        final World initialWorld = new World(WORLD_WIDTH, WORLD_HEIGHT, initialPlayers, initialFoods);
-        final GameStateManager gameManager = new DefaultGameStateManager(initialWorld);
-
+        String playerName = "p2";
+        final GameStateManager gameManager;
+        try {
+            gameManager = new DistributedGameStateManager("192.168.1.183", playerName);
+        } catch (IOException | TimeoutException e) {
+            System.err.println("Error during connection: " + e.getMessage());
+            return;
+        }
         // List to keep track of active views for repainting
         final List<JFrameRepaintable> views = new ArrayList<>();
 
@@ -32,25 +37,21 @@ public class Main {
             views.add(globalView::repaintView); // Add repaint method reference
             globalView.setVisible(true);
 
-            LocalView localViewP1 = new LocalView(gameManager, "p1");
+            LocalView localViewP1 = new LocalView(gameManager, playerName);
             views.add(localViewP1::repaintView);
             localViewP1.setVisible(true);
-
-            LocalView localViewP2 = new LocalView(gameManager, "p2");
-            views.add(localViewP2::repaintView);
-            localViewP2.setVisible(true);
         });
-
-        final Timer timer = new Timer(true); // Use daemon thread for timer
+        final Timer timer = new Timer(true);
         timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                // AI movement for p1, p3, p4
-                AIMovement.moveAI("p1", gameManager);
-                AIMovement.moveAI("p3", gameManager); // Assuming p3 is AI
-                AIMovement.moveAI("p4", gameManager); // Assuming p4 is AI
+                AIMovement.moveAI(playerName, gameManager);
 
-                gameManager.tick();
+                try {
+                    gameManager.tick();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
 
                 SwingUtilities.invokeLater(() -> {
                     for (JFrameRepaintable view : views) {

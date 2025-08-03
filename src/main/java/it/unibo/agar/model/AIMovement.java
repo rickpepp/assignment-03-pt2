@@ -2,6 +2,7 @@ package it.unibo.agar.model;
 
 import java.util.Comparator;
 import java.util.Optional;
+import java.util.Random;
 
 /**
  * Module to manage the AI movement in a simple Agar.IO system.
@@ -29,7 +30,10 @@ public class AIMovement {
                 }
             } else {
                 // No Food, Stop the player movement
-                gameManager.setPlayerDirection(playerName, 0, 0);
+                Random rand = new Random();
+                double numeroCasuale1 = rand.nextDouble() * 2 - 1;
+                double numeroCasuale2 = rand.nextDouble() * 2 - 1;
+                gameManager.setPlayerDirection(playerName, numeroCasuale1, numeroCasuale2);
             }
         }
     }
