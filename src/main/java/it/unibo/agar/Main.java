@@ -21,7 +21,7 @@ public class Main {
     private static final long GAME_TICK_MS = 20; // Corresponds to ~33 FPS
 
     public static void main(String[] args) {
-        String playerName = "p2";
+        String playerName = "Pippo";
         final GameStateManager gameManager;
         try {
             gameManager = new DistributedGameStateManager("192.168.1.183", playerName);
