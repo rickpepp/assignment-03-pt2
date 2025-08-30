@@ -7,6 +7,8 @@ import com.rabbitmq.client.*;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
@@ -16,17 +18,29 @@ public class DistributedGameStateManager implements GameStateManager{
     private static final int WIDTH = 1000;
     private static final int N_OF_FOOD = 20;
 
-    private static final String EXCHANGE_NAME = "PlayerPosition";
+    private static final String EXCHANGE_NAME_PLAYER_POSITION = "PlayerPosition";
+    private static final String EXCHANGE_NAME_ACTUAL_WORLD = "ActualWorld";
     private final String playerName;
     private World world;
-    private Channel channel;
+    private Channel playerChannel;
+    private Channel worldChannel;
     private final Map<String, Position> playerDirections;
     private ObjectMapper mapper;
 
-    public DistributedGameStateManager(String hostAddress, String playerName) throws IOException, TimeoutException {
-        this.setRabbitMQConnection(hostAddress);
+    private BullyNodeExchange node;
+
+    private int firstTurn = 0;
+
+    public DistributedGameStateManager(String hostAddress, String playerName) throws IOException, TimeoutException, ExecutionException, InterruptedException {
         this.world = new World(WIDTH, HEIGHT, List.of(new Player(playerName,200,200,200)),
                 GameInitializer.initialFoods(N_OF_FOOD, WIDTH, HEIGHT, 150));
+        this.node = new BullyNodeExchange(playerName, hostAddress);
+        node.connect();
+        node.start();
+        this.setRabbitMQConnection(hostAddress);
+        
+        Future<Boolean> fut = node.startElection();
+        System.out.println("Am I the leader: " + fut.get());
         this.playerName = playerName;
         this.playerDirections = new HashMap<>();
         this.world.getPlayers().forEach(p -> playerDirections.put(p.getId(), Position.ZERO));
@@ -36,24 +50,54 @@ public class DistributedGameStateManager implements GameStateManager{
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost(hostAddress);
         Connection connection = factory.newConnection();
-        this.channel = connection.createChannel();
-        channel.exchangeDeclare(EXCHANGE_NAME, "fanout");
+        this.playerChannel = connection.createChannel();
+        playerChannel.exchangeDeclare(EXCHANGE_NAME_PLAYER_POSITION, "fanout");
         mapper = new ObjectMapper();
-        String queueName = channel.queueDeclare().getQueue();
-        channel.queueBind(queueName, EXCHANGE_NAME, "");
+        String queueName = playerChannel.queueDeclare().getQueue();
+        playerChannel.queueBind(queueName, EXCHANGE_NAME_PLAYER_POSITION, "");
         DeliverCallback deliverCallback = (consumerTag, delivery) -> {
-            String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            try {
-                Player player = mapper.readValue(message, Player.class);
-                if (!player.getId().equals(this.playerName))
-                    this.world = updatePlayerPosition(player);
-            } catch (JsonProcessingException ignored) {
-                ;
+            if (firstTurn <= 100 || node.isLeader()) {
+                String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
+                try {
+                    Player player = mapper.readValue(message, Player.class);
+                    if (!player.getId().equals(this.playerName)) {
+                        this.world = updatePlayerPosition(player);
+                    }
+                } catch (JsonProcessingException ignored) {
+                    ;
+                }
             }
-            channel.basicAck(delivery.getEnvelope().getDeliveryTag(), true);
+            
+            playerChannel.basicAck(delivery.getEnvelope().getDeliveryTag(), true);
         };
-        channel.basicQos(1, false);
-        channel.basicConsume(queueName, false, deliverCallback, consumerTag -> { });
+        playerChannel.basicQos(1, false);
+        playerChannel.basicConsume(queueName, false, deliverCallback, consumerTag -> { });
+
+        this.worldChannel = connection.createChannel();
+        worldChannel.exchangeDeclare(EXCHANGE_NAME_ACTUAL_WORLD, "fanout");
+        String queueNameWorld = worldChannel.queueDeclare().getQueue();
+        worldChannel.queueBind(queueNameWorld, EXCHANGE_NAME_ACTUAL_WORLD, "");
+        DeliverCallback deliverCallbackWorld = (consumerTag, delivery) -> {
+            String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
+            if (firstTurn <= 100) {
+                firstTurn++;
+            }
+            try {
+                if (firstTurn > 100) {
+                    World newWorld = mapper.readValue(message, World.class);
+                    this.world = newWorld;
+                } else {
+                    World newWorld = mapper.readValue(message, World.class);
+                    this.world = new World(WIDTH, HEIGHT, this.world.getPlayers(),
+                        newWorld.getFoods());
+                }
+            } catch (JsonProcessingException ignored) {
+                ; 
+            }
+            worldChannel.basicAck(delivery.getEnvelope().getDeliveryTag(), true);
+        };
+        worldChannel.basicQos(1, false);
+        worldChannel.basicConsume(queueNameWorld, false, deliverCallbackWorld, consumerTag -> { });
     }
 
     @Override
@@ -75,12 +119,17 @@ public class DistributedGameStateManager implements GameStateManager{
         String message;
         if (player.isPresent()) {
             message = mapper.writeValueAsString(player.get());
-
         } else {
             message = "";
         }
-        channel.basicPublish(EXCHANGE_NAME, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
+        playerChannel.basicPublish(EXCHANGE_NAME_PLAYER_POSITION, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
                 message.getBytes(StandardCharsets.UTF_8));
+ 
+        if (node.isLeader()) {
+            String worldMessage = mapper.writeValueAsString(this.world);
+            worldChannel.basicPublish(EXCHANGE_NAME_ACTUAL_WORLD, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
+                    worldMessage.getBytes(StandardCharsets.UTF_8));   
+        }
     }
 
     private World moveAllPlayers(final World currentWorld) {

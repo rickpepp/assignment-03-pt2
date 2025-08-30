@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 public class Main {
@@ -21,13 +22,15 @@ public class Main {
     private static final long GAME_TICK_MS = 20; // Corresponds to ~33 FPS
 
     public static void main(String[] args) {
-        String playerName = "Pluto";
+        String playerName = "Dudu";
         final GameStateManager gameManager;
         try {
             gameManager = new DistributedGameStateManager("192.168.1.183", playerName);
         } catch (IOException | TimeoutException e) {
             System.err.println("Error during connection: " + e.getMessage());
             return;
+        } catch (ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
         }
         // List to keep track of active views for repainting
         final List<JFrameRepaintable> views = new ArrayList<>();
