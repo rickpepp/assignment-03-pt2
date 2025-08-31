@@ -124,12 +124,53 @@ public class DistributedGameStateManager implements GameStateManager{
         }
         playerChannel.basicPublish(EXCHANGE_NAME_PLAYER_POSITION, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
                 message.getBytes(StandardCharsets.UTF_8));
- 
+
         if (node.isLeader()) {
+            this.world = this.handleEating(this.world);
             String worldMessage = mapper.writeValueAsString(this.world);
             worldChannel.basicPublish(EXCHANGE_NAME_ACTUAL_WORLD, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
                     worldMessage.getBytes(StandardCharsets.UTF_8));   
         }
+    }
+
+    private World handleEating(final World currentWorld) {
+        final List<Player> updatedPlayers = currentWorld.getPlayers().stream()
+                .map(player -> growPlayer(currentWorld, player))
+                .toList();
+
+        final List<Food> foodsToRemove = currentWorld.getPlayers().stream()
+                .flatMap(player -> eatenFoods(currentWorld, player).stream())
+                .distinct()
+                .toList();
+
+        final List<Player> playersToRemove = currentWorld.getPlayers().stream()
+                .flatMap(player -> eatenPlayers(currentWorld, player).stream())
+                .distinct()
+                .toList();
+
+        return new World(currentWorld.getWidth(), currentWorld.getHeight(), updatedPlayers, currentWorld.getFoods())
+                .removeFoods(foodsToRemove)
+                .removePlayers(playersToRemove);
+    }
+
+    private Player growPlayer(final World world, final Player player) {
+        final Player afterFood = eatenFoods(world, player).stream()
+                .reduce(player, Player::grow, (p1, p2) -> p1);
+
+        return eatenPlayers(world, afterFood).stream()
+                .reduce(afterFood, Player::grow, (p1, p2) -> p1);
+    }
+
+    private List<Food> eatenFoods(final World world, final Player player) {
+        return world.getFoods().stream()
+                .filter(food -> EatingManager.canEatFood(player, food))
+                .toList();
+    }
+
+    private List<Player> eatenPlayers(final World world, final Player player) {
+        return world.getPlayersExcludingSelf(player).stream()
+                .filter(other -> EatingManager.canEatPlayer(player, other))
+                .toList();
     }
 
     private World moveAllPlayers(final World currentWorld) {
