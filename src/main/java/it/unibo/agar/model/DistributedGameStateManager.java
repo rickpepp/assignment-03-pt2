@@ -33,9 +33,14 @@ public class DistributedGameStateManager implements GameStateManager{
 
     private long lastWorldMessageTimestamp = System.currentTimeMillis();
 
+    private Map<String, Long> lastPlayerPositionTimestamp;
+
     private final long WORLD_TIMEOUT_MS = 1000;
+    private final long PLAYER_TIMEOUT_MS = 3000;
 
     public DistributedGameStateManager(String hostAddress, String playerName) throws IOException, TimeoutException, ExecutionException, InterruptedException {
+        lastPlayerPositionTimestamp = new HashMap<>();
+
         this.world = new World(WIDTH, HEIGHT, List.of(new Player(playerName,200,200,200)),
                 GameInitializer.initialFoods(N_OF_FOOD, WIDTH, HEIGHT, 150));
         this.node = new BullyNodeExchange(playerName, hostAddress);
@@ -60,18 +65,18 @@ public class DistributedGameStateManager implements GameStateManager{
         String queueName = playerChannel.queueDeclare().getQueue();
         playerChannel.queueBind(queueName, EXCHANGE_NAME_PLAYER_POSITION, "");
         DeliverCallback deliverCallback = (consumerTag, delivery) -> {
-            if (firstTurn <= 100 || node.isLeader()) {
+            try {
                 String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
-                try {
-                    Player player = mapper.readValue(message, Player.class);
+                Player player = mapper.readValue(message, Player.class);
+                this.lastPlayerPositionTimestamp.put(player.getId(), System.currentTimeMillis());
+                if (firstTurn <= 100 || node.isLeader()) {
                     if (!player.getId().equals(this.playerName)) {
                         this.world = updatePlayerPosition(player);
                     }
-                } catch (JsonProcessingException ignored) {
-                    ;
                 }
+            } catch (JsonProcessingException ignored) {
+                ;
             }
-            
             playerChannel.basicAck(delivery.getEnvelope().getDeliveryTag(), true);
         };
         playerChannel.basicQos(1, false);
@@ -138,10 +143,18 @@ public class DistributedGameStateManager implements GameStateManager{
                 message.getBytes(StandardCharsets.UTF_8));
 
         if (node.isLeader()) {
+            this.lastPlayerPositionTimestamp.forEach((k, v) -> {
+                if (System.currentTimeMillis() - v > PLAYER_TIMEOUT_MS) {
+                    this.world = new World(this.world.getWidth(),
+                            this.world.getHeight(),
+                            this.world.getPlayers().stream().filter(p -> !p.getId().equals(k)).toList(),
+                            this.world.getFoods());
+                }
+            });
             this.world = this.handleEating(this.world);
             String worldMessage = mapper.writeValueAsString(this.world);
             worldChannel.basicPublish(EXCHANGE_NAME_ACTUAL_WORLD, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
-                    worldMessage.getBytes(StandardCharsets.UTF_8));   
+                    worldMessage.getBytes(StandardCharsets.UTF_8));
         }
     }
 
