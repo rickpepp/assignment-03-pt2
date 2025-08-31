@@ -22,10 +22,18 @@ public class Main {
     private static final long GAME_TICK_MS = 20; // Corresponds to ~33 FPS
 
     public static void main(String[] args) {
-        String playerName = "Dudu";
+
+        if (args.length != 2) {
+            System.err.println("Usage: java Main <playerName> <hostAddress>");
+            return;
+        }
+
+        String playerName = args[0];
+        String hostAddress = args[1];
+
         final GameStateManager gameManager;
         try {
-            gameManager = new DistributedGameStateManager("192.168.1.183", playerName);
+            gameManager = new DistributedGameStateManager(hostAddress, playerName);
         } catch (IOException | TimeoutException e) {
             System.err.println("Error during connection: " + e.getMessage());
             return;
