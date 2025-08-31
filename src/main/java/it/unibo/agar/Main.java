@@ -60,7 +60,7 @@ public class Main {
 
                 try {
                     gameManager.tick();
-                } catch (IOException e) {
+                } catch (IOException | ExecutionException | InterruptedException e) {
                     throw new RuntimeException(e);
                 }
 

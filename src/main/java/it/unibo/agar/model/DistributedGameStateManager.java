@@ -31,6 +31,10 @@ public class DistributedGameStateManager implements GameStateManager{
 
     private int firstTurn = 0;
 
+    private long lastWorldMessageTimestamp = System.currentTimeMillis();
+
+    private final long WORLD_TIMEOUT_MS = 1000;
+
     public DistributedGameStateManager(String hostAddress, String playerName) throws IOException, TimeoutException, ExecutionException, InterruptedException {
         this.world = new World(WIDTH, HEIGHT, List.of(new Player(playerName,200,200,200)),
                 GameInitializer.initialFoods(N_OF_FOOD, WIDTH, HEIGHT, 150));
@@ -78,6 +82,7 @@ public class DistributedGameStateManager implements GameStateManager{
         String queueNameWorld = worldChannel.queueDeclare().getQueue();
         worldChannel.queueBind(queueNameWorld, EXCHANGE_NAME_ACTUAL_WORLD, "");
         DeliverCallback deliverCallbackWorld = (consumerTag, delivery) -> {
+            lastWorldMessageTimestamp = System.currentTimeMillis();
             String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
             if (firstTurn <= 100) {
                 firstTurn++;
@@ -113,10 +118,17 @@ public class DistributedGameStateManager implements GameStateManager{
     }
 
     @Override
-    public void tick() throws IOException {
+    public void tick() throws IOException, ExecutionException, InterruptedException {
         this.world = moveAllPlayers(this.world);
         Optional<Player> player = this.world.getPlayerById(this.playerName);
         String message;
+
+        if (System.currentTimeMillis() - this.lastWorldMessageTimestamp > WORLD_TIMEOUT_MS) {
+            Future<Boolean> fut = this.node.startElection();
+            System.out.println("New election result, Am I leader: " + fut.get());
+            this.lastWorldMessageTimestamp = System.currentTimeMillis();
+        }
+
         if (player.isPresent()) {
             message = mapper.writeValueAsString(player.get());
         } else {
