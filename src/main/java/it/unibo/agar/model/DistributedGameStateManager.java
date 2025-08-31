@@ -11,6 +11,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class DistributedGameStateManager implements GameStateManager{
     private static final double PLAYER_SPEED = 1.0;
@@ -152,6 +153,12 @@ public class DistributedGameStateManager implements GameStateManager{
                 }
             });
             this.world = this.handleEating(this.world);
+            if (this.world.getFoods().size() < 15) {
+                this.world = new World(this.world.getWidth(),
+                        this.world.getHeight(),
+                        this.world.getPlayers(),
+                        Stream.concat(this.world.getFoods().stream(), GameInitializer.initialFoods(5, WIDTH, HEIGHT, 150).stream()).toList());
+            }
             String worldMessage = mapper.writeValueAsString(this.world);
             worldChannel.basicPublish(EXCHANGE_NAME_ACTUAL_WORLD, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
                     worldMessage.getBytes(StandardCharsets.UTF_8));
