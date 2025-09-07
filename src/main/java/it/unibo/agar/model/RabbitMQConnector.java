@@ -1,6 +1,5 @@
 package it.unibo.agar.model;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.*;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

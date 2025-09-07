@@ -1,11 +1,9 @@
 package it.unibo.agar.model;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.*;
 import it.unibo.agar.Main;
 
-import javax.swing.*;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -16,12 +14,15 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class DistributedGameStateManager implements GameStateManager{
+    private static final int MIN_FOOD_ON_THE_MAP = 15;
     private static final double PLAYER_SPEED = 1.0;
     private static final int HEIGHT = 1000;
     private static final int WIDTH = 1000;
     private static final int N_OF_FOOD = 20;
     private static final long WORLD_TIMEOUT_MS = 1000;
     private static final long PLAYER_TIMEOUT_MS = 3000;
+    public static final int WINNING_MASS = 1000;
+    public static final int FOOD_MASS = 150;
 
     private final String playerName;
     private World world;
@@ -38,23 +39,25 @@ public class DistributedGameStateManager implements GameStateManager{
         this.connector = new RabbitMQConnector();
         this.serializer = new Serializer();
         this.world = new World(WIDTH, HEIGHT, List.of(new Player(playerName,200,200,200)),
-                GameInitializer.initialFoods(N_OF_FOOD, WIDTH, HEIGHT, 150));
+                GameInitializer.initialFoods(N_OF_FOOD, WIDTH, HEIGHT, FOOD_MASS));
         this.connector.connect(hostAddress);
         this.electionNode = new ElectionNode(playerName, this.connector, false);
         this.connector.setPlayerMessageCallback(this.updatePlayerMessageCallback());
         this.connector.setWorldMessageCallback(this.updateWorldMessageCallback());
-
-        this.connector.setVictoryMessageCallback((consumerTag, delivery) -> {
-            String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            Main.onVictory(message);
-            this.connector.victoryChannelAck(delivery);
-        });
-
+        this.connector.setVictoryMessageCallback(this.victoryMessageCallback());
         Future<Boolean> fut = electionNode.startElection();
         System.out.println("Am I the leader: " + fut.get());
         this.playerName = playerName;
         this.playerDirections = new HashMap<>();
         this.world.getPlayers().forEach(p -> playerDirections.put(p.getId(), Position.ZERO));
+    }
+
+    public DeliverCallback victoryMessageCallback() {
+        return (consumerTag, delivery) -> {
+            String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
+            Main.onVictory(message);
+            this.connector.victoryChannelAck(delivery);
+        };
     }
 
     public DeliverCallback updateWorldMessageCallback() {
@@ -131,18 +134,29 @@ public class DistributedGameStateManager implements GameStateManager{
             this.world = checkIfThereIsEnoughFood(this.world);
             String worldMessage = serializer.serializeObject(this.world);
             this.connector.publishWorldMessage(worldMessage);
-            if (this.world.getPlayers().stream().anyMatch(p -> p.getMass() >= 1000)) {
-                this.connector.publishVictoryMessage(this.world.getPlayers().stream().filter(p -> p.getMass() >= 1000).toList().get(0).getId());
+            if (isThereAWinner()) {
+                this.connector.publishVictoryMessage(getWinnerName());
             }
         }
     }
 
+    private String getWinnerName() {
+        return this.world.getPlayers().stream().filter(p -> p.getMass() >= WINNING_MASS)
+                .toList().get(0).getId();
+    }
+
+    private boolean isThereAWinner() {
+        return this.world.getPlayers().stream().anyMatch(p -> p.getMass() >= WINNING_MASS);
+    }
+
     private World checkIfThereIsEnoughFood(World world) {
-        if (world.getFoods().size() < 15) {
+        if (world.getFoods().size() < MIN_FOOD_ON_THE_MAP) {
             return new World(world.getWidth(),
                     world.getHeight(),
                     world.getPlayers(),
-                    Stream.concat(world.getFoods().stream(), GameInitializer.initialFoods(5, WIDTH, HEIGHT, 150).stream()).toList());
+                    Stream.concat(world.getFoods().stream(),
+                            GameInitializer.initialFoods(5, WIDTH, HEIGHT, FOOD_MASS)
+                                    .stream()).toList());
         }
         return world;
     }
