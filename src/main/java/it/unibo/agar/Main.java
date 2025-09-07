@@ -3,6 +3,7 @@ package it.unibo.agar;
 import it.unibo.agar.model.*;
 import it.unibo.agar.view.GlobalView;
 import it.unibo.agar.view.LocalView;
+import it.unibo.agar.view.StartScreen;
 
 import javax.swing.*;
 import java.io.IOException;
@@ -17,12 +18,10 @@ public class Main {
     private static final long GAME_TICK_MS = 20; // Corresponds to ~33 FPS
 
     public static void main(String[] args) {
+        StartScreen.showAndWait();
+    }
 
-        if (args.length != 2) {
-            System.err.println("Usage: java Main <playerName> <hostAddress>");
-            return;
-        }
-
+    public static void startGame(String[] args) {
         String playerName = args[0];
         String hostAddress = args[1];
 
@@ -35,12 +34,11 @@ public class Main {
         } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         }
-        // List to keep track of active views for repainting
         final List<JFrameRepaintable> views = new ArrayList<>();
 
         SwingUtilities.invokeLater(() -> {
             GlobalView globalView = new GlobalView(gameManager);
-            views.add(globalView::repaintView); // Add repaint method reference
+            views.add(globalView::repaintView);
             globalView.setVisible(true);
 
             LocalView localViewP1 = new LocalView(gameManager, playerName);
@@ -51,7 +49,7 @@ public class Main {
         timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                AIMovement.moveAI(playerName, gameManager);
+                //AIMovement.moveAI(playerName, gameManager);
 
                 try {
                     gameManager.tick();
@@ -68,7 +66,6 @@ public class Main {
         }, 0, GAME_TICK_MS);
     }
 
-    // Functional interface for repaintable views
     @FunctionalInterface
     interface JFrameRepaintable {
         void repaintView();
