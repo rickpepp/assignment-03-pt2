@@ -22,7 +22,7 @@ public class DistributedGameStateManager implements GameStateManager{
     private World world;
     private final Map<String, Position> playerDirections;
     private ObjectMapper mapper;
-    private BullyNodeExchange node;
+    private ElectionNode electionNode;
     private int firstTurn = 0;
     private long lastWorldMessageTimestamp = System.currentTimeMillis();
     private final Map<String, Long> lastPlayerPositionTimestamp;
@@ -32,17 +32,16 @@ public class DistributedGameStateManager implements GameStateManager{
 
     public DistributedGameStateManager(String hostAddress, String playerName) throws IOException, TimeoutException, ExecutionException, InterruptedException {
         lastPlayerPositionTimestamp = new HashMap<>();
+        this.connector = new RabbitMQConnector();
+
         this.world = new World(WIDTH, HEIGHT, List.of(new Player(playerName,200,200,200)),
                 GameInitializer.initialFoods(N_OF_FOOD, WIDTH, HEIGHT, 150));
-        this.node = new BullyNodeExchange(playerName, hostAddress);
-        node.connect();
-        node.start();
-        mapper = new ObjectMapper();
-        this.connector = new RabbitMQConnector();
         this.connector.connect(hostAddress);
+        this.electionNode = new ElectionNode(playerName, this.connector, false);
+        mapper = new ObjectMapper();
         this.connector.setPlayerMessageCallback(this.updatePlayerMessageCallback());
         this.connector.setWorldMessageCallback(this.updateWorldMessageCallback());
-        Future<Boolean> fut = node.startElection();
+        Future<Boolean> fut = electionNode.startElection();
         System.out.println("Am I the leader: " + fut.get());
         this.playerName = playerName;
         this.playerDirections = new HashMap<>();
@@ -77,7 +76,7 @@ public class DistributedGameStateManager implements GameStateManager{
                 String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
                 Player player = mapper.readValue(message, Player.class);
                 this.lastPlayerPositionTimestamp.put(player.getId(), System.currentTimeMillis());
-                if (firstTurn <= 100 || node.isLeader()) {
+                if (firstTurn <= 100 || electionNode.isLeader()) {
                     if (!player.getId().equals(this.playerName)) {
                         this.world = updatePlayerPosition(player);
                     }
@@ -106,21 +105,18 @@ public class DistributedGameStateManager implements GameStateManager{
         this.world = moveAllPlayers(this.world);
         Optional<Player> player = this.world.getPlayerById(this.playerName);
         String message;
-
-        if (checkIfLeaderIsAlive()) {
-            Future<Boolean> fut = this.node.startElection();
+        if (checkIfLeaderIsDeath()) {
+            Future<Boolean> fut = this.electionNode.startElection();
             System.out.println("New election result, Am I leader: " + fut.get());
             this.lastWorldMessageTimestamp = System.currentTimeMillis();
         }
-
         if (player.isPresent()) {
             message = mapper.writeValueAsString(player.get());
         } else {
             message = "";
         }
         this.connector.publishPlayerMessage(message);
-
-        if (node.isLeader()) {
+        if (electionNode.isLeader()) {
             this.lastPlayerPositionTimestamp.forEach(this::removeInactivePlayers);
             this.world = this.handleEating(this.world);
             this.world = checkIfThereIsEnoughFood(this.world);
@@ -148,7 +144,7 @@ public class DistributedGameStateManager implements GameStateManager{
         }
     }
 
-    private boolean checkIfLeaderIsAlive() {
+    private boolean checkIfLeaderIsDeath() {
         return System.currentTimeMillis() - this.lastWorldMessageTimestamp > WORLD_TIMEOUT_MS;
     }
 
