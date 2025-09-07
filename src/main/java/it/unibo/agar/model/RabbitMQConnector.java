@@ -10,14 +10,16 @@ public class RabbitMQConnector {
     private static final String EXCHANGE_NAME_PLAYER_POSITION = "PlayerPosition";
     private static final String EXCHANGE_NAME_ACTUAL_WORLD = "ActualWorld";
     private static final String EXCHANGE_NAME_ELECTION = "Election";
+    private static final String EXCHANGE_NAME_VICTORY = "Victory";
     private Channel playerChannel;
     private Channel worldChannel;
     private Channel electionChannel;
-    private ObjectMapper mapper;
+    private Channel victoryChannel;
 
     private String playerQueueName;
     private String worldQueueName;
     private String electionQueueName;
+    private String victoryQueueName;
 
     public void connect(String hostAddress) throws IOException, TimeoutException {
         ConnectionFactory factory = new ConnectionFactory();
@@ -26,6 +28,7 @@ public class RabbitMQConnector {
         setElectionChannel(connection);
         setPlayerChannel(connection);
         setWorldChannel(connection);
+        setVictoryChannel(connection);
     }
 
     private void setElectionChannel(Connection connection) throws IOException {
@@ -52,6 +55,14 @@ public class RabbitMQConnector {
         playerChannel.basicQos(1, false);
     }
 
+    private void setVictoryChannel(Connection connection) throws IOException {
+        this.victoryChannel = connection.createChannel();
+        victoryChannel.exchangeDeclare(EXCHANGE_NAME_VICTORY, "fanout");
+        victoryQueueName = victoryChannel.queueDeclare().getQueue();
+        victoryChannel.queueBind(victoryQueueName, EXCHANGE_NAME_VICTORY, "");
+        victoryChannel.basicQos(1, false);
+    }
+
     public void setElectionMessageCallback(DeliverCallback callback) throws IOException {
         electionChannel.basicConsume(electionQueueName, false, callback, consumerTag -> { });
     }
@@ -62,6 +73,10 @@ public class RabbitMQConnector {
 
     public void setWorldMessageCallback(DeliverCallback callback) throws IOException {
         worldChannel.basicConsume(worldQueueName, false, callback, consumerTag -> { });
+    }
+
+    public void setVictoryMessageCallback(DeliverCallback callback) throws IOException {
+        victoryChannel.basicConsume(victoryQueueName, false, callback, consumerTag -> { });
     }
 
     public void publishPlayerMessage(String message) throws IOException {
@@ -79,6 +94,11 @@ public class RabbitMQConnector {
                 message.getBytes(StandardCharsets.UTF_8));
     }
 
+    public void publishVictoryMessage(String message) throws IOException {
+        victoryChannel.basicPublish(EXCHANGE_NAME_VICTORY, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
+                message.getBytes(StandardCharsets.UTF_8));
+    }
+
     public void worldChannelAck(Delivery delivery) throws IOException {
         worldChannel.basicAck(delivery.getEnvelope().getDeliveryTag(), true);
     }
@@ -89,5 +109,9 @@ public class RabbitMQConnector {
 
     public void electionChannelAck(Delivery delivery) throws IOException {
         electionChannel.basicAck(delivery.getEnvelope().getDeliveryTag(), true);
+    }
+
+    public void victoryChannelAck(Delivery delivery) throws IOException {
+        victoryChannel.basicAck(delivery.getEnvelope().getDeliveryTag(), true);
     }
 }

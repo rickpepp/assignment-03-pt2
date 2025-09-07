@@ -3,7 +3,9 @@ package it.unibo.agar.model;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.*;
+import it.unibo.agar.Main;
 
+import javax.swing.*;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -41,6 +43,13 @@ public class DistributedGameStateManager implements GameStateManager{
         this.electionNode = new ElectionNode(playerName, this.connector, false);
         this.connector.setPlayerMessageCallback(this.updatePlayerMessageCallback());
         this.connector.setWorldMessageCallback(this.updateWorldMessageCallback());
+
+        this.connector.setVictoryMessageCallback((consumerTag, delivery) -> {
+            String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
+            Main.onVictory(message);
+            this.connector.victoryChannelAck(delivery);
+        });
+
         Future<Boolean> fut = electionNode.startElection();
         System.out.println("Am I the leader: " + fut.get());
         this.playerName = playerName;
@@ -122,6 +131,9 @@ public class DistributedGameStateManager implements GameStateManager{
             this.world = checkIfThereIsEnoughFood(this.world);
             String worldMessage = serializer.serializeObject(this.world);
             this.connector.publishWorldMessage(worldMessage);
+            if (this.world.getPlayers().stream().anyMatch(p -> p.getMass() >= 1000)) {
+                this.connector.publishVictoryMessage(this.world.getPlayers().stream().filter(p -> p.getMass() >= 1000).toList().get(0).getId());
+            }
         }
     }
 

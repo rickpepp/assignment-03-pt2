@@ -6,6 +6,7 @@ import it.unibo.agar.view.LocalView;
 import it.unibo.agar.view.StartScreen;
 
 import javax.swing.*;
+import java.awt.*;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +17,7 @@ import java.util.concurrent.TimeoutException;
 
 public class Main {
     private static final long GAME_TICK_MS = 20; // Corresponds to ~33 FPS
+    private static final Timer timer = new Timer();
 
     public static void main(String[] args) {
         StartScreen.showAndWait();
@@ -45,7 +47,6 @@ public class Main {
             views.add(localViewP1::repaintView);
             localViewP1.setVisible(true);
         });
-        final Timer timer = new Timer(true);
         timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
@@ -69,5 +70,24 @@ public class Main {
     @FunctionalInterface
     interface JFrameRepaintable {
         void repaintView();
+    }
+
+    public static void onVictory(String playerName) {
+        timer.cancel();
+        SwingUtilities.invokeLater(() -> {
+            JFrame frame = new JFrame("Demo");
+            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            frame.setSize(300, 200);
+            frame.setLocationRelativeTo(null);
+            frame.setVisible(false);
+            showWinner(frame, playerName);
+            System.exit(0);
+        });
+    }
+
+    public static void showWinner(Component parent, String playerName) {
+        String message = playerName + " win the game!";
+        String title = "Victory";
+        JOptionPane.showMessageDialog(parent, message, title, JOptionPane.INFORMATION_MESSAGE);
     }
 }
