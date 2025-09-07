@@ -14,11 +14,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 public class Main {
-
-    private static final int WORLD_WIDTH = 1000;
-    private static final int WORLD_HEIGHT = 1000;
-    private static final int NUM_PLAYERS = 4; // p1, p2, p3, p4
-    private static final int NUM_FOODS = 100;
     private static final long GAME_TICK_MS = 20; // Corresponds to ~33 FPS
 
     public static void main(String[] args) {

@@ -15,6 +15,7 @@ public class ElectionNode {
     private final AtomicLong lastElectionTimestamp = new AtomicLong(0);
     private final RabbitMQConnector connector;
     private final boolean debug;
+    private final Serializer serializer;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "bully-node-" + nodeId);
@@ -30,6 +31,7 @@ public class ElectionNode {
         this.debug = debug;
         this.connector = connector;
         this.start();
+        this.serializer = new Serializer();
     }
 
     public ElectionNode(String nodeId, RabbitMQConnector connector) throws IOException {
@@ -61,20 +63,17 @@ public class ElectionNode {
     }
 
     private void sendMessage(String type, String senderId) throws IOException {
-        String body = type + "|" + senderId + "|" + System.currentTimeMillis();
+        String body = this.serializer.serializeObject(
+                new ElectionMessage(type, senderId, System.currentTimeMillis()));
         this.connector.publishElectionMessage(body);
         if (this.debug)
             System.out.println("[" + nodeId + "] SEND -> " + body);
     }
 
     private void handleMessage(String msg) throws IOException {
-        String[] parts = msg.split("\\|");
-        if (parts.length < 2) {
-            System.out.println("[" + nodeId + "] Malformed msg: " + msg);
-            return;
-        }
-        String type = parts[0];
-        String sender = parts[1];
+        ElectionMessage message = this.serializer.deserializeElectionMessage(msg);
+        String type = message.type();
+        String sender = message.senderId();
 
         if (Objects.equals(sender, this.nodeId)) {
             if (this.debug)
