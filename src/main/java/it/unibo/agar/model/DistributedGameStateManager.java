@@ -18,37 +18,30 @@ public class DistributedGameStateManager implements GameStateManager{
     private static final int HEIGHT = 1000;
     private static final int WIDTH = 1000;
     private static final int N_OF_FOOD = 20;
-
-    private static final String EXCHANGE_NAME_PLAYER_POSITION = "PlayerPosition";
-    private static final String EXCHANGE_NAME_ACTUAL_WORLD = "ActualWorld";
     private final String playerName;
     private World world;
-    private Channel playerChannel;
-    private Channel worldChannel;
     private final Map<String, Position> playerDirections;
     private ObjectMapper mapper;
-
     private BullyNodeExchange node;
-
     private int firstTurn = 0;
-
     private long lastWorldMessageTimestamp = System.currentTimeMillis();
-
-    private Map<String, Long> lastPlayerPositionTimestamp;
-
+    private final Map<String, Long> lastPlayerPositionTimestamp;
     private final long WORLD_TIMEOUT_MS = 1000;
     private final long PLAYER_TIMEOUT_MS = 3000;
+    private final RabbitMQConnector connector;
 
     public DistributedGameStateManager(String hostAddress, String playerName) throws IOException, TimeoutException, ExecutionException, InterruptedException {
         lastPlayerPositionTimestamp = new HashMap<>();
-
         this.world = new World(WIDTH, HEIGHT, List.of(new Player(playerName,200,200,200)),
                 GameInitializer.initialFoods(N_OF_FOOD, WIDTH, HEIGHT, 150));
         this.node = new BullyNodeExchange(playerName, hostAddress);
         node.connect();
         node.start();
-        this.setRabbitMQConnection(hostAddress);
-        
+        mapper = new ObjectMapper();
+        this.connector = new RabbitMQConnector();
+        this.connector.connect(hostAddress);
+        this.connector.setPlayerMessageCallback(this.updatePlayerMessageCallback());
+        this.connector.setWorldMessageCallback(this.updateWorldMessageCallback());
         Future<Boolean> fut = node.startElection();
         System.out.println("Am I the leader: " + fut.get());
         this.playerName = playerName;
@@ -56,16 +49,30 @@ public class DistributedGameStateManager implements GameStateManager{
         this.world.getPlayers().forEach(p -> playerDirections.put(p.getId(), Position.ZERO));
     }
 
-    private void setRabbitMQConnection(String hostAddress) throws IOException, TimeoutException {
-        ConnectionFactory factory = new ConnectionFactory();
-        factory.setHost(hostAddress);
-        Connection connection = factory.newConnection();
-        this.playerChannel = connection.createChannel();
-        playerChannel.exchangeDeclare(EXCHANGE_NAME_PLAYER_POSITION, "fanout");
-        mapper = new ObjectMapper();
-        String queueName = playerChannel.queueDeclare().getQueue();
-        playerChannel.queueBind(queueName, EXCHANGE_NAME_PLAYER_POSITION, "");
-        DeliverCallback deliverCallback = (consumerTag, delivery) -> {
+    public DeliverCallback updateWorldMessageCallback() throws IOException {
+        return (consumerTag, delivery) -> {
+            lastWorldMessageTimestamp = System.currentTimeMillis();
+            String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
+            if (firstTurn <= 100) {
+                firstTurn++;
+            }
+            try {
+                if (firstTurn > 100) {
+                    this.world = mapper.readValue(message, World.class);
+                } else {
+                    World newWorld = mapper.readValue(message, World.class);
+                    this.world = new World(WIDTH, HEIGHT, this.world.getPlayers(),
+                            newWorld.getFoods());
+                }
+            } catch (JsonProcessingException ignored) {
+                ;
+            }
+            this.connector.worldChannelAck(delivery);
+        };
+    }
+
+    public DeliverCallback updatePlayerMessageCallback() throws IOException {
+        return (consumerTag, delivery) -> {
             try {
                 String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
                 Player player = mapper.readValue(message, Player.class);
@@ -78,37 +85,8 @@ public class DistributedGameStateManager implements GameStateManager{
             } catch (JsonProcessingException ignored) {
                 ;
             }
-            playerChannel.basicAck(delivery.getEnvelope().getDeliveryTag(), true);
+            this.connector.playerChannelAck(delivery);
         };
-        playerChannel.basicQos(1, false);
-        playerChannel.basicConsume(queueName, false, deliverCallback, consumerTag -> { });
-
-        this.worldChannel = connection.createChannel();
-        worldChannel.exchangeDeclare(EXCHANGE_NAME_ACTUAL_WORLD, "fanout");
-        String queueNameWorld = worldChannel.queueDeclare().getQueue();
-        worldChannel.queueBind(queueNameWorld, EXCHANGE_NAME_ACTUAL_WORLD, "");
-        DeliverCallback deliverCallbackWorld = (consumerTag, delivery) -> {
-            lastWorldMessageTimestamp = System.currentTimeMillis();
-            String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            if (firstTurn <= 100) {
-                firstTurn++;
-            }
-            try {
-                if (firstTurn > 100) {
-                    World newWorld = mapper.readValue(message, World.class);
-                    this.world = newWorld;
-                } else {
-                    World newWorld = mapper.readValue(message, World.class);
-                    this.world = new World(WIDTH, HEIGHT, this.world.getPlayers(),
-                        newWorld.getFoods());
-                }
-            } catch (JsonProcessingException ignored) {
-                ; 
-            }
-            worldChannel.basicAck(delivery.getEnvelope().getDeliveryTag(), true);
-        };
-        worldChannel.basicQos(1, false);
-        worldChannel.basicConsume(queueNameWorld, false, deliverCallbackWorld, consumerTag -> { });
     }
 
     @Override
@@ -129,7 +107,7 @@ public class DistributedGameStateManager implements GameStateManager{
         Optional<Player> player = this.world.getPlayerById(this.playerName);
         String message;
 
-        if (System.currentTimeMillis() - this.lastWorldMessageTimestamp > WORLD_TIMEOUT_MS) {
+        if (checkIfLeaderIsAlive()) {
             Future<Boolean> fut = this.node.startElection();
             System.out.println("New election result, Am I leader: " + fut.get());
             this.lastWorldMessageTimestamp = System.currentTimeMillis();
@@ -140,29 +118,38 @@ public class DistributedGameStateManager implements GameStateManager{
         } else {
             message = "";
         }
-        playerChannel.basicPublish(EXCHANGE_NAME_PLAYER_POSITION, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
-                message.getBytes(StandardCharsets.UTF_8));
+        this.connector.publishPlayerMessage(message);
 
         if (node.isLeader()) {
-            this.lastPlayerPositionTimestamp.forEach((k, v) -> {
-                if (System.currentTimeMillis() - v > PLAYER_TIMEOUT_MS) {
-                    this.world = new World(this.world.getWidth(),
-                            this.world.getHeight(),
-                            this.world.getPlayers().stream().filter(p -> !p.getId().equals(k)).toList(),
-                            this.world.getFoods());
-                }
-            });
+            this.lastPlayerPositionTimestamp.forEach(this::removeInactivePlayers);
             this.world = this.handleEating(this.world);
-            if (this.world.getFoods().size() < 15) {
-                this.world = new World(this.world.getWidth(),
-                        this.world.getHeight(),
-                        this.world.getPlayers(),
-                        Stream.concat(this.world.getFoods().stream(), GameInitializer.initialFoods(5, WIDTH, HEIGHT, 150).stream()).toList());
-            }
+            this.world = checkIfThereIsEnoughFood(this.world);
             String worldMessage = mapper.writeValueAsString(this.world);
-            worldChannel.basicPublish(EXCHANGE_NAME_ACTUAL_WORLD, "", new AMQP.BasicProperties.Builder().deliveryMode(2).build(),
-                    worldMessage.getBytes(StandardCharsets.UTF_8));
+            this.connector.publishWorldMessage(worldMessage);
         }
+    }
+
+    private World checkIfThereIsEnoughFood(World world) {
+        if (world.getFoods().size() < 15) {
+            return new World(world.getWidth(),
+                    world.getHeight(),
+                    world.getPlayers(),
+                    Stream.concat(world.getFoods().stream(), GameInitializer.initialFoods(5, WIDTH, HEIGHT, 150).stream()).toList());
+        }
+        return world;
+    }
+
+    private void removeInactivePlayers(String playerId, long lastTimestamp) {
+        if (System.currentTimeMillis() - lastTimestamp > PLAYER_TIMEOUT_MS) {
+            this.world = new World(this.world.getWidth(),
+                    this.world.getHeight(),
+                    this.world.getPlayers().stream().filter(p -> !p.getId().equals(playerId)).toList(),
+                    this.world.getFoods());
+        }
+    }
+
+    private boolean checkIfLeaderIsAlive() {
+        return System.currentTimeMillis() - this.lastWorldMessageTimestamp > WORLD_TIMEOUT_MS;
     }
 
     private World handleEating(final World currentWorld) {
@@ -214,26 +201,33 @@ public class DistributedGameStateManager implements GameStateManager{
                     return player.moveTo(newX, newY);
                 })
                 .collect(Collectors.toList());
-
         return new World(currentWorld.getWidth(), currentWorld.getHeight(), updatedPlayers, currentWorld.getFoods());
     }
 
     private World updatePlayerPosition(Player newPlayer) {
         final List<Player> updatedPlayers;
-        if (this.world.getPlayers().stream().noneMatch(p -> Objects.equals(p.getId(), newPlayer.getId()))) {
+        if (isPlayerNotPresent(newPlayer)) {
             updatedPlayers = new ArrayList<>(this.world.getPlayers());
             updatedPlayers.add(newPlayer);
         } else {
-            updatedPlayers = this.world.getPlayers().stream()
-                    .map(player -> {
-                        if (player.getId().equals(newPlayer.getId())) {
-                            return newPlayer;
-                        } else {
-                            return player;
-                        }
-                    })
-                    .collect(Collectors.toList());
+            updatedPlayers = updateExistentPlayer(newPlayer);
         }
         return new World(this.world.getWidth(), this.world.getHeight(), updatedPlayers, this.world.getFoods());
+    }
+
+    private List<Player> updateExistentPlayer(Player newPlayer) {
+        return this.world.getPlayers().stream()
+                .map(player -> {
+                    if (player.getId().equals(newPlayer.getId())) {
+                        return newPlayer;
+                    } else {
+                        return player;
+                    }
+                })
+                .collect(Collectors.toList());
+    }
+
+    private boolean isPlayerNotPresent(Player newPlayer) {
+        return this.world.getPlayers().stream().noneMatch(p -> Objects.equals(p.getId(), newPlayer.getId()));
     }
 }
