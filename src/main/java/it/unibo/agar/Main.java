@@ -4,6 +4,8 @@ import it.unibo.agar.model.*;
 import it.unibo.agar.view.GlobalView;
 import it.unibo.agar.view.LocalView;
 import it.unibo.agar.view.StartScreen;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.swing.*;
 import java.awt.*;
@@ -16,6 +18,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 public class Main {
+    private static final Logger LOGGER = LoggerFactory.getLogger(Main.class);
     private static final long GAME_TICK_MS = 20; // Corresponds to ~33 FPS
     private static final Timer timer = new Timer();
 
@@ -29,9 +32,9 @@ public class Main {
 
         final GameStateManager gameManager;
         try {
-            gameManager = new DistributedGameStateManager(hostAddress, playerName);
+            gameManager = new DistributedGameStateManager(hostAddress, playerName, false);
         } catch (IOException | TimeoutException e) {
-            System.err.println("Error during connection: " + e.getMessage());
+            LOGGER.error("Error during connection: {}", e.getMessage());
             return;
         } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);

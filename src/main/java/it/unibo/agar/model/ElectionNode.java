@@ -1,6 +1,8 @@
 package it.unibo.agar.model;
 
 import com.rabbitmq.client.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -10,6 +12,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 public class ElectionNode {
+    private static Logger LOGGER = LoggerFactory.getLogger(ElectionNode.class);
     private String nodeId = null;
     private volatile String coordinatorId = null;
     private final AtomicLong lastElectionTimestamp = new AtomicLong(0);
@@ -18,7 +21,7 @@ public class ElectionNode {
     private final Serializer serializer;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "bully-node-" + nodeId);
+        Thread t = new Thread(r, "election-node-" + nodeId);
         t.setDaemon(true);
         return t;
     });
@@ -49,14 +52,14 @@ public class ElectionNode {
         return (consumerTag, delivery) -> {
             String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
             if (this.debug)
-                System.out.println("[" + nodeId + "] RAW RECEIVE -> " + message);
+                LOGGER.info("[{}] RAW RECEIVE -> {}", nodeId, message);
             try {
                 handleMessage(message);
             } finally {
                 try {
                     this.connector.electionChannelAck(delivery);
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    LOGGER.error(e.getMessage());
                 }
             }
         };
@@ -67,7 +70,7 @@ public class ElectionNode {
                 new ElectionMessage(type, senderId, System.currentTimeMillis()));
         this.connector.publishElectionMessage(body);
         if (this.debug)
-            System.out.println("[" + nodeId + "] SEND -> " + body);
+            LOGGER.info("[{}] SEND -> {}", nodeId, body);
     }
 
     private void handleMessage(String msg) throws IOException {
@@ -77,52 +80,51 @@ public class ElectionNode {
 
         if (Objects.equals(sender, this.nodeId)) {
             if (this.debug)
-                System.out.println("[" + nodeId + "] Ignoring my own message");
+                LOGGER.info("[{}] Ignoring my own message", nodeId);
             return;
         }
 
         if (this.debug)
-            System.out.println("[" + nodeId + "] HANDLE -> type=" + type + " from=" + sender);
+            LOGGER.info("[{}] HANDLE -> type={} from={}", nodeId, type, sender);
 
         switch (type) {
             case "ELECTION":
                 this.coordinatorId = null;
                 if (this.debug)
-                    System.out.println("[" + nodeId + "] Received ELECTION from " + sender +
-                            " (myId=" + nodeId + ", compare=" + nodeId.compareTo(sender) + ")");
+                    LOGGER.info("[{}] Received ELECTION from {} (myId={}, compare={})", nodeId, sender, nodeId, nodeId.compareTo(sender));
                 if (this.nodeId.compareTo(sender) > 0) {
                     if (this.debug)
-                        System.out.println("[" + nodeId + "] I am higher -> send OK and start own election");
+                        LOGGER.info("[{}] I am higher -> send OK and start own election", nodeId);
                     sendMessage("OK", this.nodeId);
                     executor.submit(this::startElectionInternal);
                 } else {
                     if (this.debug)
-                        System.out.println("[" + nodeId + "] I am lower -> do not respond with OK");
+                        LOGGER.info("[{}] I am lower -> do not respond with OK", nodeId);
                 }
                 break;
 
             case "OK":
                 if (this.debug)
-                    System.out.println("[" + nodeId + "] Received OK from " + sender);
+                    LOGGER.info("[{}] Received OK from {}", nodeId, sender);
                 lastElectionTimestamp.set(System.currentTimeMillis());
                 break;
 
             case "COORDINATOR":
                 if (this.debug)
-                    System.out.println("[" + nodeId + "] Received COORDINATOR from " + sender);
+                    LOGGER.info("[{}] Received COORDINATOR from {}", nodeId, sender);
                 coordinatorId = sender;
                 coordinatorListener.accept(sender);
                 break;
 
             default:
                 if (this.debug)
-                    System.out.println("[" + nodeId + "] Unknown msg: " + msg);
+                    LOGGER.info("[{}] Unknown msg: {}", nodeId, msg);
         }
     }
 
     public Future<Boolean> startElection() {
         if (this.debug)
-            System.out.println("[" + nodeId + "] External trigger -> startElection()");
+            LOGGER.info("[{}] External trigger -> startElection()", nodeId);
         return executor.submit(this::startElectionInternal);
     }
 
@@ -131,7 +133,7 @@ public class ElectionNode {
 
             long sendTs = System.currentTimeMillis();
             if (this.debug)
-                System.out.println("[" + nodeId + "] Starting election... ts=" + sendTs);
+                LOGGER.info("[{}] Starting election... ts={}", nodeId, sendTs);
             sendMessage("ELECTION", this.nodeId);
 
             int waitMs = 600;
@@ -147,7 +149,7 @@ public class ElectionNode {
                 waited += interval;
                 long last = lastElectionTimestamp.get();
                 if (this.debug)
-                    System.out.println("[" + nodeId + "] Waiting... waited=" + waited + " lastOkTs=" + last + " startTs=" + startTs);
+                    LOGGER.info("[{}] Waiting... waited={} lastOkTs={} startTs={}", nodeId, waited, last, startTs);
                 if (last > startTs) {
                     gotOk = true;
                     break;
@@ -163,7 +165,7 @@ public class ElectionNode {
                 return false;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.error("[{}] Error -> ", e.getMessage());
             return false;
         }
     }

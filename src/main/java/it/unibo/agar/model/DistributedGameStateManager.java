@@ -3,6 +3,8 @@ package it.unibo.agar.model;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.rabbitmq.client.*;
 import it.unibo.agar.Main;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -14,6 +16,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class DistributedGameStateManager implements GameStateManager{
+    private static Logger LOGGER = LoggerFactory.getLogger(DistributedGameStateManager.class);
     private static final int MIN_FOOD_ON_THE_MAP = 15;
     private static final double PLAYER_SPEED = 1.0;
     private static final int HEIGHT = 1000;
@@ -33,8 +36,11 @@ public class DistributedGameStateManager implements GameStateManager{
     private long lastWorldMessageTimestamp = System.currentTimeMillis();
     private final Map<String, Long> lastPlayerPositionTimestamp;
     private final RabbitMQConnector connector;
+    private final Boolean debug;
 
-    public DistributedGameStateManager(String hostAddress, String playerName) throws IOException, TimeoutException, ExecutionException, InterruptedException {
+    public DistributedGameStateManager(String hostAddress, String playerName, Boolean debug) throws IOException,
+            TimeoutException, ExecutionException, InterruptedException {
+        this.debug = debug;
         lastPlayerPositionTimestamp = new HashMap<>();
         this.connector = new RabbitMQConnector();
         this.serializer = new Serializer();
@@ -46,7 +52,8 @@ public class DistributedGameStateManager implements GameStateManager{
         this.connector.setWorldMessageCallback(this.updateWorldMessageCallback());
         this.connector.setVictoryMessageCallback(this.victoryMessageCallback());
         Future<Boolean> fut = electionNode.startElection();
-        System.out.println("Am I the leader: " + fut.get());
+        if (debug)
+            LOGGER.info("[{}] AM I THE LEADER -> {}", playerName, fut.get());
         this.playerName = playerName;
         this.playerDirections = new HashMap<>();
         this.world.getPlayers().forEach(p -> playerDirections.put(p.getId(), Position.ZERO));
@@ -55,6 +62,8 @@ public class DistributedGameStateManager implements GameStateManager{
     public DeliverCallback victoryMessageCallback() {
         return (consumerTag, delivery) -> {
             String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
+            if (debug)
+                LOGGER.info("[{}] I WIN", message);
             Main.onVictory(message);
             this.connector.victoryChannelAck(delivery);
         };
@@ -64,6 +73,8 @@ public class DistributedGameStateManager implements GameStateManager{
         return (consumerTag, delivery) -> {
             lastWorldMessageTimestamp = System.currentTimeMillis();
             String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
+            if (debug)
+                LOGGER.info("[{}] RECEIVED WORLD MESSAGE -> {}", playerName, message);
             if (firstTurn <= 100) {
                 firstTurn++;
             }
@@ -75,8 +86,9 @@ public class DistributedGameStateManager implements GameStateManager{
                     this.world = new World(WIDTH, HEIGHT, this.world.getPlayers(),
                             newWorld.getFoods());
                 }
-            } catch (JsonProcessingException ignored) {
-                ;
+            } catch (JsonProcessingException e) {
+                if (debug)
+                    LOGGER.error("[{}] ERROR -> {}", playerName, e.getMessage());
             }
             this.connector.worldChannelAck(delivery);
         };
@@ -86,6 +98,8 @@ public class DistributedGameStateManager implements GameStateManager{
         return (consumerTag, delivery) -> {
             try {
                 String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
+                if (debug)
+                    LOGGER.info("[{}] RECEIVED PLAYER MESSAGE -> {}", playerName, message);
                 Player player = serializer.deserializePlayer(message);
                 this.lastPlayerPositionTimestamp.put(player.getId(), System.currentTimeMillis());
                 if (firstTurn <= 100 || electionNode.isLeader()) {
@@ -93,8 +107,9 @@ public class DistributedGameStateManager implements GameStateManager{
                         this.world = updatePlayerPosition(player);
                     }
                 }
-            } catch (JsonProcessingException ignored) {
-                ;
+            } catch (JsonProcessingException e) {
+                if (debug)
+                    LOGGER.error("[{}] ERROR -> {}", playerName, e.getMessage());
             }
             this.connector.playerChannelAck(delivery);
         };
@@ -119,7 +134,8 @@ public class DistributedGameStateManager implements GameStateManager{
         String message;
         if (checkIfLeaderIsDeath()) {
             Future<Boolean> fut = this.electionNode.startElection();
-            System.out.println("New election result, Am I leader: " + fut.get());
+            if (debug)
+                LOGGER.info("[{}] AM I THE LEADER -> {}", playerName, fut.get());
             this.lastWorldMessageTimestamp = System.currentTimeMillis();
         }
         if (player.isPresent()) {
@@ -142,7 +158,7 @@ public class DistributedGameStateManager implements GameStateManager{
 
     private String getWinnerName() {
         return this.world.getPlayers().stream().filter(p -> p.getMass() >= WINNING_MASS)
-                .toList().get(0).getId();
+                .toList().getFirst().getId();
     }
 
     private boolean isThereAWinner() {
